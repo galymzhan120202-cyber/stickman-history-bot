@@ -1,0 +1,66 @@
+[
+  {
+    "index": 1,
+    "text": "Three days into the solo hike, the trail disappeared under two feet of fresh snow. He'd trained for cold, but never for being completely, utterly alone.",
+    "audio": "scenes/narration_1.mp3",
+    "image": "scenes/scene_1.jpg",
+    "start": 0.0,
+    "duration": 10.92
+  },
+  {
+    "index": 2,
+    "text": "The storm rolled in faster than the forecast promised, swallowing the ridge line in white and erasing every landmark he'd used to navigate.",
+    "audio": "scenes/narration_2.mp3",
+    "image": "scenes/scene_2.jpg",
+    "start": 10.92,
+    "duration": 8.352
+  },
+  {
+    "index": 3,
+    "text": "By early afternoon he was no longer following a trail. He was following his own instincts, and even those were starting to feel unreliable.",
+    "audio": "scenes/narration_3.mp3",
+    "image": "scenes/scene_3.jpg",
+    "start": 19.272,
+    "duration": 9.408
+  },
+  {
+    "index": 4,
+    "text": "By nightfall, he'd stripped pine branches into a makeshift shelter, packing snow along the edges and praying the wind wouldn't tear it apart.",
+    "audio": "scenes/narration_4.mp3",
+    "image": "scenes/scene_4.jpg",
+    "start": 28.68,
+    "duration": 8.544
+  },
+  {
+    "index": 5,
+    "text": "The fire was the only thing standing between him and a cold that had killed hikers twice his experience. He fed it every scrap of dry wood he had.",
+    "audio": "scenes/narration_5.mp3",
+    "image": "scenes/scene_5.jpg",
+    "start": 37.224,
+    "duration": 9.48
+  },
+  {
+    "index": 6,
+    "text": "Somewhere around midnight, his hands stopped shaking from cold and started shaking from exhaustion. Sleep felt dangerous, but staying awake felt almost impossible.",
+    "audio": "scenes/narration_6.mp3",
+    "image": "scenes/scene_6.jpg",
+    "start": 46.704,
+    "duration": 10.848
+  },
+  {
+    "index": 7,
+    "text": "He talked to himself just to hear a voice, counting his own heartbeat to stay conscious until the first grey light finally touched the trees.",
+    "audio": "scenes/narration_7.mp3",
+    "image": "scenes/scene_7.jpg",
+    "start": 57.552,
+    "duration": 8.232
+  },
+  {
+    "index": 8,
+    "text": "When the search team's flashlights broke through the treeline at dawn, he was hypothermic and barely standing, but very much, unmistakably alive.",
+    "audio": "scenes/narration_8.mp3",
+    "image": "scenes/scene_8.jpg",
+    "start": 65.784,
+    "duration": 9.288
+  }
+]

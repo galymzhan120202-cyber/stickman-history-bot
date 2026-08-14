@@ -6,3 +6,14 @@ dist
 # Ignore the output video from Git but not videos you import into src/.
 out
 whisper.cpp
+
+# Automation (generated per-run, secrets)
+automation/__pycache__/
+automation/.venv/
+automation/client_secrets.json
+automation/youtube_token.json
+automation/.env
+public/scenes/live_*.mp3
+public/scenes/live_beats.json
+public/scenes/music.mp3
+public/scenes/_openverse_temp.mp3
