@@ -109,7 +109,10 @@ SCENARIOS = [
 ]
 
 PROMPT_TEMPLATE = """You are writing a narrated survival-story video script for a YouTube channel that
-uses a simple animated stick-figure character.
+uses a simple animated stick-figure character. The background scene changes every beat, so getting
+the right background for what is LITERALLY happening in that sentence is the most important part of
+this task — more important than variety. A wrong background (e.g. bright calm forest during a
+life-threatening blizzard) is a hard failure.
 
 Scenario: {scenario}
 
@@ -122,34 +125,47 @@ Respond ONLY with JSON in this exact shape, no markdown, no extra text:
   "description": "...",
   "hashtags": "...",
   "beats": [
-    {{"text": "...", "env": "...", "pose": "..."}},
+    {{"text": "...", "reason": "...", "env": "...", "pose": "..."}},
     ...
   ]
 }}
 
 Rules:
 - "beats": {min_beats} to {max_beats} items. Each beat is 1-3 sentences of narration (15-30 words),
-  present-tense-feeling but written in past tense, building the story in order: setup, the danger
-  starting, getting worse, a low point, and a resolution (rescue or survival). No dialogue in quotes.
-- "env" MUST be exactly one of: {envs}. Use "forest-day" or "sunny-meadow" only for calm/before/after
-  beats, "blizzard"/"frozen-river" for active danger, "dusk-shelter" for building shelter,
-  "campfire-night"/"predawn" for the overnight survival stretch, "dawn-rescue" for the rescue moment,
-  "recovery-room" only for a final beat after rescue. Reuse envs across beats when it fits the story beat.
+  present-tense-feeling but written in past tense. No dialogue in quotes.
+- "reason": one short phrase naming the single concrete thing happening in this beat (e.g. "spots
+  distant rescue light", "packs snow onto the shelter wall", "shivers alone by the dying fire").
+  Pick "env" and "pose" to depict exactly that thing, not the general mood of the story.
+- The beats must follow this act structure, tied to their position in the list:
+  1. Beat 1 ONLY (opening/setup, before anything goes wrong): env is "forest-day" or "sunny-meadow".
+  2. Danger starts (roughly the next ~25% of beats): env is "blizzard" or "frozen-river".
+  3. Things get worse / shelter is built (~next 20%): env is "dusk-shelter" (building/inside a
+     shelter), or "blizzard"/"frozen-river" if still exposed outside.
+  4. The overnight low point (~next 30%): env is "campfire-night" or "predawn". A beat about
+     spotting rescue, hearing something, or any glimmer of hope during this stretch is still
+     "predawn" or "campfire-night" — NOT "forest-day" — because the character has not been
+     rescued yet and it is not daytime.
+  5. The actual rescue moment (1 beat, near the end): env is "dawn-rescue".
+  6. The LAST beat ONLY (after rescue — recovery, reflection, or a call to follow): env is
+     "recovery-room" or "sunny-meadow".
+  "forest-day" and "sunny-meadow" must NEVER appear on any beat except beat 1 or the final beat.
+  Reusing the same env on consecutive/nearby beats within stages 2-4 is fine and expected — that is
+  not a problem, correctness of match to the text is what matters.
+- "env" MUST be exactly one of: {envs}.
 - "pose" MUST be exactly one of: {poses}. Use "walk" for travel/searching, "confused" for
   disorientation/fear/listening, "build" for shelter-building, "sit-fire" for resting/huddling/cold,
-  "stand-wave" for greeting/signaling/calm moments.
+  "stand-wave" for greeting/signaling/celebrating/spotting something in the distance.
 - "title": under 70 characters, no hashtags, no clickbait ALL CAPS.
 - "description": 2-3 sentences summarizing the video, no hashtags in it.
-- "hashtags": exactly 8 tags starting with "#", space separated, must include "#shorts" is NOT
-  required (this is a long-form video) — instead include "#survival" and "#stickman".
+- "hashtags": exactly 8 tags starting with "#", space separated, must include "#survival" and
+  "#stickman".
 """
 
 
 def _gemini_request(prompt: str):
     models = [
         f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={GEMINI_API_KEY}",
-        f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={GEMINI_API_KEY}",
-        f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-lite:generateContent?key={GEMINI_API_KEY}",
+        f"https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent?key={GEMINI_API_KEY}",
     ]
     for url in models:
         model_name = url.split("models/")[1].split(":")[0]
@@ -177,6 +193,33 @@ def _gemini_request(prompt: str):
     raise RuntimeError("All Gemini models failed")
 
 
+CALM_ENVS = {"forest-day", "sunny-meadow"}
+
+
+def enforce_env_positions(beats: list) -> list:
+    """Safety net on top of the prompt: 'forest-day'/'sunny-meadow' are bright,
+    calm daytime scenes and may only ever depict the opening or closing beat.
+    If Gemini ignores that rule and puts one mid-story (e.g. on a tense
+    "spots a light in the trees" beat), silently remap it based on the beat's
+    position in the story arc instead of shipping a background that
+    contradicts the narration."""
+    n = len(beats)
+    for i, b in enumerate(beats):
+        if b["env"] not in CALM_ENVS or i in (0, n - 1):
+            continue
+        pos = i / (n - 1)
+        if pos < 0.45:
+            b["env"] = "blizzard"
+        elif pos < 0.75:
+            b["env"] = "campfire-night"
+        elif pos < 0.88:
+            b["env"] = "predawn"
+        else:
+            b["env"] = "dawn-rescue"
+        log(f"WARN beat {i + 1}: Gemini used a calm daytime env mid-story, remapped to {b['env']!r}")
+    return beats
+
+
 def validate_story(data: dict) -> dict:
     beats = data.get("beats", [])
     if not (MIN_BEATS <= len(beats) <= MAX_BEATS):
@@ -190,6 +233,7 @@ def validate_story(data: dict) -> dict:
             raise ValueError("empty beat text")
     if not data.get("title"):
         raise ValueError("missing title")
+    data["beats"] = enforce_env_positions(beats)
     return data
 
 
@@ -321,7 +365,10 @@ def render_video() -> str:
 # --- 5. YouTube upload -------------------------------------------------
 
 def upload_to_youtube(video_path: str, title: str, description: str, tags: list):
-    scopes = ["https://www.googleapis.com/auth/youtube.upload"]
+    scopes = [
+        "https://www.googleapis.com/auth/youtube.upload",
+        "https://www.googleapis.com/auth/youtube.readonly",
+    ]
     client_file = os.path.join(base_dir, "client_secrets.json")
     token_file = os.path.join(base_dir, "youtube_token.json")
 

@@ -24,7 +24,7 @@ export const StickmanScenesLayer: React.FC<{ beats: StoryBeat[] }> = ({ beats })
 
   return (
     <AbsoluteFill>
-      <StickmanScene env={beat.env} pose={beat.pose} frame={localFrame} durationInFrames={beatDurFrames} />
+      <StickmanScene env={beat.env} pose={beat.pose} frame={localFrame} durationInFrames={beatDurFrames} seed={beat.text} />
       {inCrossfade && next ? (
         <AbsoluteFill style={{ opacity: crossOpacity }}>
           <StickmanScene
@@ -32,6 +32,7 @@ export const StickmanScenesLayer: React.FC<{ beats: StoryBeat[] }> = ({ beats })
             pose={next.pose}
             frame={0}
             durationInFrames={Math.round(next.duration * FPS)}
+            seed={next.text}
           />
         </AbsoluteFill>
       ) : null}

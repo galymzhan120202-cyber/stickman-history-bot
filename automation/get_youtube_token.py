@@ -14,7 +14,10 @@ import google_auth_oauthlib.flow
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
 
 base_dir = os.path.dirname(os.path.abspath(__file__))
-scopes = ["https://www.googleapis.com/auth/youtube.upload"]
+scopes = [
+    "https://www.googleapis.com/auth/youtube.upload",
+    "https://www.googleapis.com/auth/youtube.readonly",
+]
 client_file = os.path.join(base_dir, "client_secrets.json")
 token_file = os.path.join(base_dir, "youtube_token.json")
 

@@ -247,22 +247,22 @@ const Stars: React.FC<{ frame: number }> = ({ frame }) => {
   );
 };
 
-const Sun: React.FC<{ kind: "day" | "dusk" | "dawn" }> = ({ kind }) => {
+const Sun: React.FC<{ kind: "day" | "dusk" | "dawn"; dx: number; dy: number }> = ({ kind, dx, dy }) => {
   const cfg = {
     day: { x: 1560, y: 150, r: 70, color: "#fff6c8" },
     dusk: { x: 1500, y: 250, r: 90, color: "#ffcf8a" },
     dawn: { x: 500, y: 560, r: 100, color: "#ffe4a3" },
   }[kind];
   return (
-    <g>
+    <g transform={`translate(${dx} ${dy})`}>
       <circle cx={cfg.x} cy={cfg.y} r={cfg.r * 1.8} fill={cfg.color} opacity={0.25} />
       <circle cx={cfg.x} cy={cfg.y} r={cfg.r} fill={cfg.color} opacity={0.95} />
     </g>
   );
 };
 
-const Clouds: React.FC = () => (
-  <g fill="#ffffff" opacity={0.92}>
+const Clouds: React.FC<{ dx: number; dy: number }> = ({ dx, dy }) => (
+  <g fill="#ffffff" opacity={0.92} transform={`translate(${dx} ${dy})`}>
     <g transform="translate(300 130)">
       <ellipse cx={0} cy={0} rx={70} ry={26} />
       <ellipse cx={45} cy={-10} rx={45} ry={22} />
@@ -319,12 +319,13 @@ const SnowTexture: React.FC<{ env: Env }> = ({ env }) => {
 
 const NO_SNOW_TEXTURE: Env[] = ["forest-day", "sunny-meadow", "recovery-room"];
 
-export const StickmanScene: React.FC<{ env: Env; pose: Pose; frame: number; durationInFrames: number }> = ({
-  env,
-  pose,
-  frame,
-  durationInFrames,
-}) => {
+export const StickmanScene: React.FC<{
+  env: Env;
+  pose: Pose;
+  frame: number;
+  durationInFrames: number;
+  seed?: string;
+}> = ({ env, pose, frame, durationInFrames, seed = "" }) => {
   const cfg = ENV[env];
   const { width, height } = useVideoConfig();
 
@@ -335,6 +336,19 @@ export const StickmanScene: React.FC<{ env: Env; pose: Pose; frame: number; dura
       ? interpolate(frame, [0, durationInFrames], [820, 1020], { easing: cameraEase })
       : 900;
   const CHAR_SCALE = 2.6;
+
+  // Same env can legitimately repeat across beats/videos (it just means the
+  // narration called for the same kind of moment) — this seed, derived from
+  // the beat's own narration text, keeps every occurrence from being a
+  // pixel-identical layout by nudging trees/sun/clouds and occasionally
+  // mirroring the composition.
+  const seedNum = hashString(seed || env);
+  const mirror = seededRandom(seedNum) > 0.5;
+  const sunDx = (seededRandom(seedNum + 901) - 0.5) * 160;
+  const sunDy = (seededRandom(seedNum + 902) - 0.5) * 90;
+  const cloudDx = (seededRandom(seedNum + 801) - 0.5) * 220;
+  const cloudDy = (seededRandom(seedNum + 802) - 0.5) * 70;
+  const treeJitter = (i: number) => (seededRandom(seedNum + i * 37 + 11) - 0.5) * 110;
 
   if (cfg.indoor) {
     return (
@@ -364,11 +378,14 @@ export const StickmanScene: React.FC<{ env: Env; pose: Pose; frame: number; dura
           <stop offset="100%" stopColor="#ffffff" stopOpacity={0.9} />
         </linearGradient>
       </defs>
-      <g transform={`scale(${zoom}) translate(${panX} 0)`} style={{ transformOrigin: "50% 50%" }}>
+      <g
+        transform={`scale(${zoom}) translate(${panX} 0) ${mirror ? "translate(1920 0) scale(-1 1)" : ""}`}
+        style={{ transformOrigin: "50% 50%" }}
+      >
         <rect x={0} y={0} width={1920} height={760} fill={`url(#sky-${env})`} />
-        {cfg.sun !== "none" ? <Sun kind={cfg.sun} /> : null}
+        {cfg.sun !== "none" ? <Sun kind={cfg.sun} dx={sunDx} dy={sunDy} /> : null}
         {cfg.stars ? <Stars frame={frame} /> : null}
-        {cfg.clouds ? <Clouds /> : null}
+        {cfg.clouds ? <Clouds dx={cloudDx} dy={cloudDy} /> : null}
         {cfg.mountains ? <Mountains colors={cfg.mountains} /> : null}
         <HorizonHaze />
 
@@ -377,7 +394,7 @@ export const StickmanScene: React.FC<{ env: Env; pose: Pose; frame: number; dura
         {!NO_SNOW_TEXTURE.includes(env) ? <SnowTexture env={env} /> : null}
 
         {TREE_X.map((x, i) => (
-          <Tree key={i} x={x} i={i} colors={cfg.treeColor} frame={frame} />
+          <Tree key={i} x={x + treeJitter(i)} i={i} colors={cfg.treeColor} frame={frame} />
         ))}
 
         {cfg.shelter ? <Shelter /> : null}
