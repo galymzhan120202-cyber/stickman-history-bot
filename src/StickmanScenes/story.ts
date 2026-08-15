@@ -27,6 +27,121 @@ export const computeStoryBeats = (raw: RawBeat[]): StoryBeat[] => {
   });
 };
 
+// --- AI-backdrop variant (current live pipeline) ---------------------------
+// Same idea, but the background is a per-beat Pollinations-generated image
+// tied to that exact beat's narration instead of a fixed env enum.
+export type WordTiming = { text: string; start: number; duration: number };
+
+export type LiveBeat = {
+  index: number;
+  text: string;
+  audio: string;
+  start: number;
+  duration: number;
+  image: string;
+  pose: Pose;
+  cold: boolean;
+  words: WordTiming[];
+};
+
+export type RawLiveBeat = {
+  text: string;
+  audio: string;
+  duration: number;
+  image: string;
+  pose: Pose;
+  cold: boolean;
+  words: WordTiming[];
+};
+
+export const computeLiveBeats = (raw: RawLiveBeat[]): LiveBeat[] => {
+  let cursor = 0;
+  return raw.map((b, i) => {
+    const beat: LiveBeat = { index: i + 1, start: cursor, ...b };
+    cursor += b.duration;
+    return beat;
+  });
+};
+
+// Static fallback (reuses images/audio already fetched earlier in
+// public/scenes/) for local preview when no live_beats.json is present.
+const RAW_LIVE_BEATS: RawLiveBeat[] = [
+  {
+    text: "Three days into the solo hike, the trail disappeared under two feet of fresh snow. He'd trained for cold, but never for being completely, utterly alone.",
+    audio: "scenes/narration_1.mp3",
+    image: "scenes/scene_1.jpg",
+    duration: 10.92,
+    pose: "walk",
+    cold: true,
+    words: [],
+  },
+  {
+    text: "The storm rolled in faster than the forecast promised, swallowing the ridge line in white and erasing every landmark he'd used to navigate.",
+    audio: "scenes/narration_2.mp3",
+    image: "scenes/scene_2.jpg",
+    duration: 8.352,
+    pose: "walk",
+    cold: true,
+    words: [],
+  },
+  {
+    text: "By early afternoon he was no longer following a trail. He was following his own instincts, and even those were starting to feel unreliable.",
+    audio: "scenes/narration_3.mp3",
+    image: "scenes/scene_3.jpg",
+    duration: 9.408,
+    pose: "confused",
+    cold: true,
+    words: [],
+  },
+  {
+    text: "By nightfall, he'd stripped pine branches into a makeshift shelter, packing snow along the edges and praying the wind wouldn't tear it apart.",
+    audio: "scenes/narration_4.mp3",
+    image: "scenes/scene_4.jpg",
+    duration: 8.544,
+    pose: "build",
+    cold: true,
+    words: [],
+  },
+  {
+    text: "The fire was the only thing standing between him and a cold that had killed hikers twice his experience. He fed it every scrap of dry wood he had.",
+    audio: "scenes/narration_5.mp3",
+    image: "scenes/scene_5.jpg",
+    duration: 9.48,
+    pose: "sit-fire",
+    cold: true,
+    words: [],
+  },
+  {
+    text: "Somewhere around midnight, his hands stopped shaking from cold and started shaking from exhaustion. Sleep felt dangerous, but staying awake felt almost impossible.",
+    audio: "scenes/narration_6.mp3",
+    image: "scenes/scene_6.jpg",
+    duration: 10.848,
+    pose: "sit-fire",
+    cold: true,
+    words: [],
+  },
+  {
+    text: "He talked to himself just to hear a voice, counting his own heartbeat to stay conscious until the first grey light finally touched the trees.",
+    audio: "scenes/narration_7.mp3",
+    image: "scenes/scene_7.jpg",
+    duration: 8.232,
+    pose: "sit-fire",
+    cold: true,
+    words: [],
+  },
+  {
+    text: "When the search team's flashlights broke through the treeline at dawn, he was hypothermic and barely standing, but very much, unmistakably alive.",
+    audio: "scenes/narration_8.mp3",
+    image: "scenes/scene_8.jpg",
+    duration: 9.288,
+    pose: "stand-wave",
+    cold: false,
+    words: [],
+  },
+];
+
+export const liveStoryBeats: LiveBeat[] = computeLiveBeats(RAW_LIVE_BEATS);
+
 // Static fallback story (used by the Root.tsx demo composition / local
 // preview when no generated scenes/live_beats.json is present).
 const RAW_BEATS: RawBeat[] = [

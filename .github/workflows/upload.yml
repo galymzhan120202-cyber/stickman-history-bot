@@ -8,7 +8,7 @@ on:
 jobs:
   upload:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
 
     steps:
       - name: Код жүктеу
@@ -53,8 +53,8 @@ jobs:
           YOUTUBE_CATEGORY_ID=1
           YOUTUBE_PRIVACY_STATUS=public
           YOUTUBE_MADE_FOR_KIDS=false
-          MIN_BEATS=10
-          MAX_BEATS=15
+          MIN_BEATS=16
+          MAX_BEATS=22
           MAX_RETRIES=3
           RETRY_DELAY=2
           EOF

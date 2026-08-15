@@ -1,18 +1,19 @@
 """
 Full automation for the Stickman Survival Stories channel:
 
-  1. Gemini writes a 10-15 beat survival story as JSON, each beat tagged with
-     one of the fixed `env`/`pose` values the Remotion rig already knows how
-     to draw (see ../src/StickmanScenes/Scene.tsx and Stickman.tsx).
-  2. Edge TTS narrates each beat separately (free, no key).
-  3. Openverse supplies a free CC0/CC-BY music bed.
-  4. `npx remotion render` renders the final MP4 from those assets.
-  5. The video is uploaded to YouTube and a Telegram notification is sent.
+  1. Gemini writes a 10-15 beat survival story as JSON. Each beat gets its
+     own narration + a specific image_prompt describing exactly what's
+     happening in that beat (no fixed env enum — the background is
+     generated fresh per beat so it can match the text precisely).
+  2. Pollinations.ai generates a background image per beat (free, no key).
+  3. Edge TTS narrates each beat separately (free, no key).
+  4. Openverse supplies a free CC0/CC-BY music bed.
+  5. `npx remotion render` composites the procedural Stickman character over
+     each beat's image (see ../src/StickmanScenes/AIBackdropScene.tsx).
+  6. The video is uploaded to YouTube and a Telegram notification is sent.
 
 Mirrors the proven pattern from ai-tech-shorts-bot / movie-facts-bot
-(Gemini + Edge TTS + GitHub Actions + YouTube Data API, all free tiers) —
-only the content shape changed, from a single short script to a multi-beat
-JSON that drives the Remotion character rig.
+(Gemini + Edge TTS + GitHub Actions + YouTube Data API, all free tiers).
 """
 import asyncio
 import json
@@ -23,6 +24,7 @@ import subprocess
 import sys
 import time
 import traceback
+import urllib.parse
 
 import edge_tts
 import google_auth_oauthlib.flow
@@ -32,6 +34,7 @@ import requests
 from dotenv import load_dotenv
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
+from PIL import Image, ImageDraw, ImageFont, ImageOps
 
 load_dotenv()
 
@@ -48,14 +51,15 @@ RETRY_DELAY = int(os.getenv("RETRY_DELAY", "2"))
 YOUTUBE_CATEGORY_ID = os.getenv("YOUTUBE_CATEGORY_ID", "1")  # Film & Animation
 YOUTUBE_PRIVACY_STATUS = os.getenv("YOUTUBE_PRIVACY_STATUS", "public")
 YOUTUBE_MADE_FOR_KIDS = os.getenv("YOUTUBE_MADE_FOR_KIDS", "false").lower() == "true"
-MIN_BEATS = int(os.getenv("MIN_BEATS", "10"))
-MAX_BEATS = int(os.getenv("MAX_BEATS", "15"))
+MIN_BEATS = int(os.getenv("MIN_BEATS", "16"))
+MAX_BEATS = int(os.getenv("MAX_BEATS", "22"))
 
-ENVS = [
-    "forest-day", "blizzard", "dusk-shelter", "campfire-night", "predawn",
-    "dawn-rescue", "frozen-river", "sunny-meadow", "recovery-room",
-]
 POSES = ["walk", "confused", "build", "sit-fire", "stand-wave"]
+
+IMAGE_STYLE_SUFFIX = (
+    ", flat 2D vector illustration, vibrant saturated colors, cinematic lighting, "
+    "wide environmental establishing shot, no people, no characters, no humans, no text, no watermark"
+)
 
 STRONG_HASHTAG_POOL = [
     "#survival", "#truestory", "#stickman", "#animation", "#youtubestory",
@@ -109,10 +113,11 @@ SCENARIOS = [
 ]
 
 PROMPT_TEMPLATE = """You are writing a narrated survival-story video script for a YouTube channel that
-uses a simple animated stick-figure character. The background scene changes every beat, so getting
-the right background for what is LITERALLY happening in that sentence is the most important part of
-this task — more important than variety. A wrong background (e.g. bright calm forest during a
-life-threatening blizzard) is a hard failure.
+overlays a simple animated stick-figure character on top of a real generated background image. A
+fresh background image is generated for every single beat, so describing EXACTLY what that beat's
+background should look like is the most important part of this task — more important than variety.
+A background that doesn't match what the text says is happening (e.g. a bright calm forest during a
+beat about a life-threatening blizzard) is a hard failure.
 
 Scenario: {scenario}
 
@@ -122,39 +127,36 @@ told in third person, in the style of a tense, grounded "based on true events" Y
 Respond ONLY with JSON in this exact shape, no markdown, no extra text:
 {{
   "title": "...",
+  "thumbnail_text": "...",
   "description": "...",
   "hashtags": "...",
   "beats": [
-    {{"text": "...", "reason": "...", "env": "...", "pose": "..."}},
+    {{"text": "...", "image_prompt": "...", "pose": "...", "cold": true}},
     ...
   ]
 }}
 
 Rules:
-- "beats": {min_beats} to {max_beats} items. Each beat is 1-3 sentences of narration (15-30 words),
-  present-tense-feeling but written in past tense. No dialogue in quotes.
-- "reason": one short phrase naming the single concrete thing happening in this beat (e.g. "spots
-  distant rescue light", "packs snow onto the shelter wall", "shivers alone by the dying fire").
-  Pick "env" and "pose" to depict exactly that thing, not the general mood of the story.
-- The beats must follow this act structure, tied to their position in the list:
-  1. Beat 1 ONLY (opening/setup, before anything goes wrong): env is "forest-day" or "sunny-meadow".
-  2. Danger starts (roughly the next ~25% of beats): env is "blizzard" or "frozen-river".
-  3. Things get worse / shelter is built (~next 20%): env is "dusk-shelter" (building/inside a
-     shelter), or "blizzard"/"frozen-river" if still exposed outside.
-  4. The overnight low point (~next 30%): env is "campfire-night" or "predawn". A beat about
-     spotting rescue, hearing something, or any glimmer of hope during this stretch is still
-     "predawn" or "campfire-night" — NOT "forest-day" — because the character has not been
-     rescued yet and it is not daytime.
-  5. The actual rescue moment (1 beat, near the end): env is "dawn-rescue".
-  6. The LAST beat ONLY (after rescue — recovery, reflection, or a call to follow): env is
-     "recovery-room" or "sunny-meadow".
-  "forest-day" and "sunny-meadow" must NEVER appear on any beat except beat 1 or the final beat.
-  Reusing the same env on consecutive/nearby beats within stages 2-4 is fine and expected — that is
-  not a problem, correctness of match to the text is what matters.
-- "env" MUST be exactly one of: {envs}.
-- "pose" MUST be exactly one of: {poses}. Use "walk" for travel/searching, "confused" for
+- "thumbnail_text": 2-5 words, ALL CAPS, the single most shocking/curiosity-driving phrase from the
+  story (e.g. "TRAPPED IN THE ICE", "NO ONE WAS COMING"). Must be readable in under a second — this
+  is NOT the title, it's much shorter and punchier.
+- "beats": {min_beats} to {max_beats} items. Each beat is exactly ONE short sentence of narration
+  (9-16 words, roughly 4-7 seconds spoken), present-tense-feeling but written in past tense, building
+  in order: calm opening, danger starting, getting worse, the overnight low point, the rescue, a short
+  resolution. No dialogue in quotes. Keep it punchy — cut adjectives that don't add new information,
+  every beat should move the story forward by one concrete event, not restate the previous beat's mood.
+- "image_prompt": a concrete, specific visual description (under 25 words) of ONLY the environment/
+  setting for exactly what this beat's text describes right now — exact weather, time of day, and
+  1-2 specific objects (e.g. "steep snow-covered pine ridge in a whiteout blizzard, low visibility",
+  "small snow cave shelter glowing from a fire inside, night, falling snow", "hospital room window
+  at sunrise, warm light, folded blanket"). Do NOT mention any person, character, human, or figure —
+  a character is added on top of the image separately. Do not repeat the same image_prompt on two
+  different beats even if the setting is similar — vary camera distance/angle/detail each time.
+- "pose": MUST be exactly one of: {poses}. Use "walk" for travel/searching, "confused" for
   disorientation/fear/listening, "build" for shelter-building, "sit-fire" for resting/huddling/cold,
   "stand-wave" for greeting/signaling/celebrating/spotting something in the distance.
+- "cold": true if the character is currently exposed to dangerous cold in this beat (visible breath,
+  huddled shivering), false for the calm opening beat, indoor recovery, or a warm memory/flashback.
 - "title": under 70 characters, no hashtags, no clickbait ALL CAPS.
 - "description": 2-3 sentences summarizing the video, no hashtags in it.
 - "hashtags": exactly 8 tags starting with "#", space separated, must include "#survival" and
@@ -193,65 +195,41 @@ def _gemini_request(prompt: str):
     raise RuntimeError("All Gemini models failed")
 
 
-CALM_ENVS = {"forest-day", "sunny-meadow"}
-
-
-def enforce_env_positions(beats: list) -> list:
-    """Safety net on top of the prompt: 'forest-day'/'sunny-meadow' are bright,
-    calm daytime scenes and may only ever depict the opening or closing beat.
-    If Gemini ignores that rule and puts one mid-story (e.g. on a tense
-    "spots a light in the trees" beat), silently remap it based on the beat's
-    position in the story arc instead of shipping a background that
-    contradicts the narration."""
-    n = len(beats)
-    for i, b in enumerate(beats):
-        if b["env"] not in CALM_ENVS or i in (0, n - 1):
-            continue
-        pos = i / (n - 1)
-        if pos < 0.45:
-            b["env"] = "blizzard"
-        elif pos < 0.75:
-            b["env"] = "campfire-night"
-        elif pos < 0.88:
-            b["env"] = "predawn"
-        else:
-            b["env"] = "dawn-rescue"
-        log(f"WARN beat {i + 1}: Gemini used a calm daytime env mid-story, remapped to {b['env']!r}")
-    return beats
-
-
 def validate_story(data: dict) -> dict:
     beats = data.get("beats", [])
     if not (MIN_BEATS <= len(beats) <= MAX_BEATS):
         raise ValueError(f"beat count {len(beats)} outside [{MIN_BEATS}, {MAX_BEATS}]")
     for b in beats:
-        if b.get("env") not in ENVS:
-            raise ValueError(f"invalid env: {b.get('env')}")
         if b.get("pose") not in POSES:
             raise ValueError(f"invalid pose: {b.get('pose')}")
         if not b.get("text", "").strip():
             raise ValueError("empty beat text")
+        if not b.get("image_prompt", "").strip():
+            raise ValueError("empty image_prompt")
+        b["cold"] = bool(b.get("cold", True))
     if not data.get("title"):
         raise ValueError("missing title")
-    data["beats"] = enforce_env_positions(beats)
+    if not data.get("thumbnail_text", "").strip():
+        data["thumbnail_text"] = data["title"].upper()
     return data
 
 
 FALLBACK_STORY = {
     "title": "Stranded: A Winter Survival Story",
+    "thumbnail_text": "TRAPPED IN THE STORM",
     "description": "A solo hiker gets caught in an early-season blizzard and has to survive the night.",
     "hashtags": "#survival #stickman #truestory #wilderness #mountainsurvival #outdoors #storytime #animation",
     "beats": [
-        {"text": "Every year, thousands of hikers underestimate how fast a quiet mountain trail can turn deadly. This is one of those stories.", "env": "forest-day", "pose": "stand-wave"},
-        {"text": "Three days into the solo hike, the trail disappeared under two feet of fresh snow.", "env": "forest-day", "pose": "walk"},
-        {"text": "The storm rolled in faster than the forecast promised, swallowing the ridge line in white.", "env": "blizzard", "pose": "walk"},
-        {"text": "By early afternoon he was no longer following a trail, only his own instincts.", "env": "blizzard", "pose": "confused"},
-        {"text": "By nightfall, he'd stripped pine branches into a makeshift shelter, packing snow along the edges.", "env": "dusk-shelter", "pose": "build"},
-        {"text": "The fire was the only thing standing between him and the cold.", "env": "campfire-night", "pose": "sit-fire"},
-        {"text": "He talked to himself just to hear a voice, counting his own heartbeat until first light.", "env": "predawn", "pose": "sit-fire"},
-        {"text": "When the search team's flashlights broke through the treeline at dawn, he was hypothermic, but alive.", "env": "dawn-rescue", "pose": "stand-wave"},
-        {"text": "Two weeks later, wrapped in a hospital blanket instead of a snowbank, he made one promise: never again, until the next trail.", "env": "recovery-room", "pose": "sit-fire"},
-        {"text": "Follow for the next survival story.", "env": "sunny-meadow", "pose": "stand-wave"},
+        {"text": "Every year, thousands of hikers underestimate how fast a quiet mountain trail can turn deadly. This is one of those stories.", "image_prompt": "sunny pine forest trailhead, bright morning light, clear blue sky", "pose": "stand-wave", "cold": False},
+        {"text": "Three days into the solo hike, the trail disappeared under two feet of fresh snow.", "image_prompt": "snow-buried hiking trail vanishing into dense pine forest, overcast sky", "pose": "walk", "cold": True},
+        {"text": "The storm rolled in faster than the forecast promised, swallowing the ridge line in white.", "image_prompt": "whiteout blizzard engulfing a mountain ridge, low visibility, heavy snow", "pose": "walk", "cold": True},
+        {"text": "By early afternoon he was no longer following a trail, only his own instincts.", "image_prompt": "disorienting dense snowy forest, no visible path, swirling snow", "pose": "confused", "cold": True},
+        {"text": "By nightfall, he'd stripped pine branches into a makeshift shelter, packing snow along the edges.", "image_prompt": "makeshift pine-branch snow shelter under construction, dusk light, snowy clearing", "pose": "build", "cold": True},
+        {"text": "The fire was the only thing standing between him and the cold.", "image_prompt": "small glowing campfire inside a snow shelter at night, warm firelight", "pose": "sit-fire", "cold": True},
+        {"text": "He talked to himself just to hear a voice, counting his own heartbeat until first light.", "image_prompt": "dying embers of a campfire, faint grey predawn light through snowy trees", "pose": "sit-fire", "cold": True},
+        {"text": "When the search team's flashlights broke through the treeline at dawn, he was hypothermic, but alive.", "image_prompt": "search and rescue flashlight beams sweeping a snowy treeline at sunrise", "pose": "stand-wave", "cold": False},
+        {"text": "Two weeks later, wrapped in a hospital blanket instead of a snowbank, he made one promise: never again, until the next trail.", "image_prompt": "cozy hospital room window at sunrise, warm light, folded blanket on a bed", "pose": "sit-fire", "cold": False},
+        {"text": "Follow for the next survival story.", "image_prompt": "sunny green mountain meadow, blue sky, distant snowy peaks", "pose": "stand-wave", "cold": False},
     ],
 }
 
@@ -259,8 +237,7 @@ FALLBACK_STORY = {
 def get_story() -> dict:
     scenario = random.choice(SCENARIOS)
     prompt = PROMPT_TEMPLATE.format(
-        scenario=scenario, min_beats=MIN_BEATS, max_beats=MAX_BEATS,
-        envs=", ".join(ENVS), poses=", ".join(POSES),
+        scenario=scenario, min_beats=MIN_BEATS, max_beats=MAX_BEATS, poses=", ".join(POSES),
     )
     try:
         return retry_with_backoff(lambda: validate_story(_gemini_request(prompt)))
@@ -269,16 +246,28 @@ def get_story() -> dict:
         return FALLBACK_STORY
 
 
-# --- 2. Edge TTS narration per beat -----------------------------------------
+# --- 2. Edge TTS narration + Pollinations background image per beat --------
 
-async def _synth(text: str, dest: str):
+async def _synth(text: str, dest: str) -> list:
+    """Synthesizes narration and returns per-word timing (edge-tts's
+    WordBoundary events, offset/duration in 100ns units) so captions can
+    highlight the exact word being spoken instead of showing a static
+    sentence for its whole duration."""
     communicate = edge_tts.Communicate(text, voice=EDGE_TTS_VOICE)
     audio = bytearray()
+    words = []
     async for chunk in communicate.stream():
         if chunk["type"] == "audio":
             audio.extend(chunk["data"])
+        elif chunk["type"] == "WordBoundary":
+            words.append({
+                "text": chunk["text"],
+                "start": round(chunk["offset"] / 10_000_000, 3),
+                "duration": round(chunk["duration"] / 10_000_000, 3),
+            })
     with open(dest, "wb") as f:
         f.write(bytes(audio))
+    return words
 
 
 def ffprobe_duration(path: str) -> float:
@@ -289,27 +278,51 @@ def ffprobe_duration(path: str) -> float:
     return float(out.decode().strip())
 
 
-def narrate_beats(beats: list) -> list:
+def fetch_beat_image(prompt: str, seed: int, dest: str):
+    """Pollinations.ai — free, keyless text-to-image. Deterministic per
+    (prompt, seed) so a retry doesn't burn quota re-rolling a working image."""
+    query = urllib.parse.quote(prompt + IMAGE_STYLE_SUFFIX)
+    url = f"https://image.pollinations.ai/prompt/{query}?width=1920&height=1080&nologo=true&seed={seed}"
+    resp = requests.get(url, timeout=60)
+    resp.raise_for_status()
+    if len(resp.content) < 5_000:
+        raise RuntimeError("image response too small")
+    with open(dest, "wb") as f:
+        f.write(resp.content)
+
+
+def process_beats(beats: list) -> list:
+    """For every beat: fetch its background image and synthesize its
+    narration, then assemble the RawLiveBeat the Remotion side expects."""
     os.makedirs(scenes_dir, exist_ok=True)
     raw_beats = []
     for i, beat in enumerate(beats, start=1):
-        dest = os.path.join(scenes_dir, f"live_narration_{i}.mp3")
+        audio_dest = os.path.join(scenes_dir, f"live_narration_{i}.mp3")
+        image_dest = os.path.join(scenes_dir, f"live_bg_{i}.jpg")
 
-        def _job(text=beat["text"], d=dest):
-            asyncio.run(_synth(text, d))
+        words_holder = {}
+
+        def _audio_job(text=beat["text"], d=audio_dest, holder=words_holder):
+            holder["words"] = asyncio.run(_synth(text, d))
             if os.path.getsize(d) < 800:
                 raise RuntimeError("narration file too small")
 
-        retry_with_backoff(_job)
-        duration = ffprobe_duration(dest)
+        def _image_job(prompt=beat["image_prompt"], d=image_dest, seed=i * 137 + 7):
+            fetch_beat_image(prompt, seed, d)
+
+        retry_with_backoff(_audio_job)
+        retry_with_backoff(_image_job)
+        duration = ffprobe_duration(audio_dest)
         raw_beats.append({
             "text": beat["text"],
             "audio": f"scenes/live_narration_{i}.mp3",
+            "image": f"scenes/live_bg_{i}.jpg",
             "duration": round(duration, 3),
-            "env": beat["env"],
             "pose": beat["pose"],
+            "cold": beat["cold"],
+            "words": words_holder.get("words", []),
         })
-        log(f"beat {i}/{len(beats)}: {duration:.2f}s ({beat['env']}/{beat['pose']})")
+        log(f"beat {i}/{len(beats)}: {duration:.2f}s ({beat['pose']}, cold={beat['cold']})")
     return raw_beats
 
 
@@ -362,30 +375,79 @@ def render_video() -> str:
     return out_path
 
 
+def make_thumbnail(image_path: str, title: str) -> str:
+    """1280x720 thumbnail: the most dramatic beat's AI background, cropped to
+    16:9, with the video title in bold stroked text over a bottom gradient —
+    the "contrast, conflict, readable in under a second" thumbnail advice."""
+    dest = os.path.join(scenes_dir, "thumbnail.jpg")
+    img = Image.open(image_path).convert("RGB")
+    img = ImageOps.fit(img, (1280, 720), method=Image.LANCZOS)
+
+    gradient = Image.new("L", (1, 720), color=0)
+    for y in range(720):
+        gradient.putpixel((0, y), int(200 * max(0, (y - 380) / 340)))
+    gradient = gradient.resize((1280, 720))
+    shadow = Image.new("RGB", (1280, 720), (0, 0, 0))
+    img = Image.composite(shadow, img, gradient)
+
+    draw = ImageDraw.Draw(img)
+    font_path = os.path.join(project_dir, "public", "theboldfont.ttf")
+    font_size = 130
+    font = ImageFont.truetype(font_path, font_size)
+
+    words = title.upper().split()
+    lines, current = [], ""
+    max_width = 1180
+    for word in words:
+        trial = f"{current} {word}".strip()
+        if draw.textlength(trial, font=font) > max_width and current:
+            lines.append(current)
+            current = word
+        else:
+            current = trial
+    if current:
+        lines.append(current)
+    lines = lines[:2]
+
+    total_h = len(lines) * (font_size + 14)
+    y = 700 - total_h
+    for line in lines:
+        w = draw.textlength(line, font=font)
+        x = (1280 - w) / 2
+        draw.text((x, y), line, font=font, fill="white", stroke_width=8, stroke_fill="black")
+        y += font_size + 14
+
+    img.save(dest, quality=92)
+    return dest
+
+
 # --- 5. YouTube upload -------------------------------------------------
 
-def upload_to_youtube(video_path: str, title: str, description: str, tags: list):
-    scopes = [
-        "https://www.googleapis.com/auth/youtube.upload",
-        "https://www.googleapis.com/auth/youtube.readonly",
-    ]
+YOUTUBE_SCOPES = ["https://www.googleapis.com/auth/youtube"]  # full scope: upload + read + thumbnails
+
+
+def get_youtube_credentials():
     client_file = os.path.join(base_dir, "client_secrets.json")
     token_file = os.path.join(base_dir, "youtube_token.json")
 
     credentials = None
     if os.path.exists(token_file):
-        credentials = Credentials.from_authorized_user_file(token_file, scopes)
+        credentials = Credentials.from_authorized_user_file(token_file, YOUTUBE_SCOPES)
         if credentials.expired and credentials.refresh_token:
             credentials.refresh(Request())
             with open(token_file, "w") as f:
                 f.write(credentials.to_json())
 
     if credentials is None:
-        flow = google_auth_oauthlib.flow.InstalledAppFlow.from_client_secrets_file(client_file, scopes)
+        flow = google_auth_oauthlib.flow.InstalledAppFlow.from_client_secrets_file(client_file, YOUTUBE_SCOPES)
         credentials = flow.run_local_server(port=0, open_browser=True)
         with open(token_file, "w") as f:
             f.write(credentials.to_json())
+    return credentials
 
+
+def upload_to_youtube(video_path: str, title: str, description: str, tags: list, thumbnail_path: str = None):
+    credentials = get_youtube_credentials()
     youtube = googleapiclient.discovery.build("youtube", "v3", credentials=credentials)
     body = {
         "snippet": {
@@ -406,8 +468,21 @@ def upload_to_youtube(video_path: str, title: str, description: str, tags: list)
         status, response = request.next_chunk()
         if status:
             log(f"upload progress: {int(status.progress() * 100)}%")
-    log(f"uploaded: https://youtube.com/watch?v={response['id']}")
-    return response["id"]
+    video_id = response["id"]
+    log(f"uploaded: https://youtube.com/watch?v={video_id}")
+
+    if thumbnail_path and os.path.exists(thumbnail_path):
+        try:
+            youtube.thumbnails().set(
+                videoId=video_id, media_body=googleapiclient.http.MediaFileUpload(thumbnail_path)
+            ).execute()
+            log("custom thumbnail set")
+        except Exception as e:
+            # Custom thumbnails require a phone-verified channel — non-fatal,
+            # YouTube just keeps its auto-picked frame instead.
+            log(f"WARN could not set thumbnail (channel phone-verified?): {str(e)[:200]}")
+
+    return video_id
 
 
 def parse_tags(hashtags: str) -> list:
@@ -428,7 +503,7 @@ def run(skip_upload: bool = False):
     story = get_story()
     log(f"title: {story['title']} ({len(story['beats'])} beats)")
 
-    raw_beats = narrate_beats(story["beats"])
+    raw_beats = process_beats(story["beats"])
     total_duration = sum(b["duration"] for b in raw_beats)
 
     with open(os.path.join(scenes_dir, "live_beats.json"), "w", encoding="utf-8") as f:
@@ -439,13 +514,22 @@ def run(skip_upload: bool = False):
     video_path = retry_with_backoff(render_video, max_retries=2)
     log(f"render complete: {video_path}")
 
+    # Pick a beat from the dramatic middle stretch (not the calm opening or
+    # resolution) as the thumbnail's background image.
+    climax_idx = min(len(raw_beats) - 1, max(0, round(len(raw_beats) * 0.65)))
+    thumbnail_source = os.path.join(project_dir, "public", raw_beats[climax_idx]["image"])
+    thumbnail_path = make_thumbnail(thumbnail_source, story["thumbnail_text"])
+    log(f"thumbnail: {thumbnail_path} (from beat {climax_idx + 1})")
+
     if skip_upload:
         log("skip_upload=True, not uploading")
         return
 
     tags = parse_tags(story["hashtags"])
     description = f"{story['description']}\n\n{story['hashtags']}"
-    video_id = retry_with_backoff(lambda: upload_to_youtube(video_path, story["title"], description, tags))
+    video_id = retry_with_backoff(
+        lambda: upload_to_youtube(video_path, story["title"], description, tags, thumbnail_path)
+    )
 
     send_telegram(
         f"✅ <b>New Stickman Survival Story uploaded!</b>\n"
